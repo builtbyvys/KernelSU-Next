@@ -13,54 +13,87 @@ display_usage() {
 
 initialize_variables() {
     if test -d "$GKI_ROOT/common/drivers"; then
-         DRIVER_DIR="$GKI_ROOT/common/drivers"
+        DRIVER_DIR="$GKI_ROOT/common/drivers"
     elif test -d "$GKI_ROOT/drivers"; then
-         DRIVER_DIR="$GKI_ROOT/drivers"
+        DRIVER_DIR="$GKI_ROOT/drivers"
     else
-         echo '[ERROR] "drivers/" directory not found.'
-         exit 127
+        echo '[ERROR] "drivers/" directory not found.'
+        exit 127
     fi
 
     DRIVER_MAKEFILE=$DRIVER_DIR/Makefile
     DRIVER_KCONFIG=$DRIVER_DIR/Kconfig
 }
 
-# Reverts modifications made by this script
+initialize_submodules() {
+    SUBMODULE_DIR="$GKI_ROOT/KernelSU-Next"
+
+    if [ ! -d "$SUBMODULE_DIR" ] || [ -z "$(ls -A "$SUBMODULE_DIR" 2>/dev/null)" ]; then
+        echo "[+] KernelSU-Next couldn't be found. Initializing..."
+        git submodule update --init --recursive
+    else
+        echo "[+] KernelSU-Next already initialized, resuming."
+    fi
+}
+
 perform_cleanup() {
     echo "[+] Cleaning up..."
     [ -L "$DRIVER_DIR/kernelsu" ] && rm "$DRIVER_DIR/kernelsu" && echo "[-] Symlink removed."
     grep -q "kernelsu" "$DRIVER_MAKEFILE" && sed -i '/kernelsu/d' "$DRIVER_MAKEFILE" && echo "[-] Makefile reverted."
     grep -q "drivers/kernelsu/Kconfig" "$DRIVER_KCONFIG" && sed -i '/drivers\/kernelsu\/Kconfig/d' "$DRIVER_KCONFIG" && echo "[-] Kconfig reverted."
-    if [ -d "$GKI_ROOT/KernelSU-Next" ]; then
-        rm -rf "$GKI_ROOT/KernelSU-Next" && echo "[-] KernelSU-Next directory deleted."
+
+    SUBMODULE_DIR="$GKI_ROOT/KernelSU-Next"
+    if [ -d "$SUBMODULE_DIR" ]; then
+        if [ -z "$(ls -A "$SUBMODULE_DIR")" ]; then
+            rm -rf "$SUBMODULE_DIR" && echo "[-] KernelSU-Next directory deleted."
+        else
+            if [ -f "$SUBMODULE_DIR/.git" ]; then
+                rm -rf "$SUBMODULE_DIR" && echo "[-] KernelSU-Next directory deleted."
+            else
+                echo "[-] KernelSU-Next directory not deleted."
+            fi
+        fi
     fi
 }
 
-# Sets up or update KernelSU-Next environment
 setup_kernelsu() {
     echo "[+] Setting up KernelSU-Next..."
-    test -d "$GKI_ROOT/KernelSU-Next" || git clone https://github.com/KernelSU-Next/KernelSU-Next && echo "[+] Repository cloned."
+
+    initialize_submodules
+
     cd "$GKI_ROOT/KernelSU-Next"
+
+    echo "[+] Fetching latest changes..."
+    git fetch origin
+
     git stash && echo "[-] Stashed current changes."
+
     if [ "$(git status | grep -Po 'v\d+(\.\d+)*' | head -n1)" ]; then
-        git checkout next && echo "[-] Switched to next branch."
+        git checkout next-susfs && echo "[-] Switched to next-susfs branch."
     fi
-    git pull && echo "[+] Repository updated."
+
+    git pull origin $(git rev-parse --abbrev-ref HEAD) && echo "[+] Submodule updated."
+
     if [ -z "${1-}" ]; then
         git checkout "$(git describe --abbrev=0 --tags)" && echo "[-] Checked out latest tag."
     else
         git checkout "$1" && echo "[-] Checked out $1." || echo "[-] Checkout default branch"
     fi
+
     cd "$DRIVER_DIR"
     ln -sf "$(realpath --relative-to="$DRIVER_DIR" "$GKI_ROOT/KernelSU-Next/kernel")" "kernelsu" && echo "[+] Symlink created."
 
-    # Add entries in Makefile and Kconfig if not already existing
-    grep -q "kernelsu" "$DRIVER_MAKEFILE" || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> "$DRIVER_MAKEFILE" && echo "[+] Modified Makefile."
-    grep -q "source \"drivers/kernelsu/Kconfig\"" "$DRIVER_KCONFIG" || sed -i "/endmenu/i\source \"drivers/kernelsu/Kconfig\"" "$DRIVER_KCONFIG" && echo "[+] Modified Kconfig."
+    grep -q "kernelsu" "$DRIVER_MAKEFILE" || {
+        printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >>"$DRIVER_MAKEFILE"
+        echo "[+] Modified Makefile."
+    }
+    grep -q "source \"drivers/kernelsu/Kconfig\"" "$DRIVER_KCONFIG" || {
+        sed -i "/endmenu/i\source \"drivers/kernelsu/Kconfig\"" "$DRIVER_KCONFIG"
+        echo "[+] Modified Kconfig."
+    }
     echo '[+] Done.'
 }
 
-# Process command-line arguments
 if [ "$#" -eq 0 ]; then
     initialize_variables
     setup_kernelsu
