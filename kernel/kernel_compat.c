@@ -76,6 +76,16 @@ static int ksu_sucompat_common(const char __user **filename_user, const char *sy
 
 	char path[sizeof(su) + 1];
 	if (ksu_copy_from_user_retry(path, *filename_user, sizeof(path)))
+int ksu_access_ok(const void *addr, unsigned long size) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,0,0)
+    /* For kernels before 5.0.0, pass the type argument to access_ok. */
+    return access_ok(VERIFY_READ, addr, size);
+#else
+    /* For kernels 5.0.0 and later, ignore the type argument. */
+    return access_ok(addr, size);
+#endif
+}
+
 		return 0;
 
 	path[sizeof(path) - 1] = '\0';
