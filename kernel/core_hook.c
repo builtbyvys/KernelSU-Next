@@ -51,7 +51,8 @@
 #include "throne_tracker.h"
 #include "kernel_compat.h"
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0) || defined(KSU_COMPAT_GET_CRED_RCU)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0) ||                           \
+	defined(KSU_COMPAT_GET_CRED_RCU)
 #define KSU_GET_CRED_RCU
 #endif
 
@@ -259,8 +260,7 @@ void ksu_escape_to_root(void)
 	       sizeof(cred->cap_bset));
 	// set ambient caps to all-zero
 	// fixes "operation not permitted" on dbus cap dropping
-	memset(&cred->cap_ambient, 0,
-			sizeof(cred->cap_ambient));
+	memset(&cred->cap_ambient, 0, sizeof(cred->cap_ambient));
 
 	setup_groups(profile, cred);
 
@@ -314,7 +314,8 @@ int ksu_handle_rename(struct dentry *old_dentry, struct dentry *new_dentry)
 	return 0;
 }
 
-static void nuke_ext4_sysfs() {
+static void nuke_ext4_sysfs()
+{
 	struct path path;
 	int err = kern_path("/data/adb/modules", 0, &path);
 	if (err) {
@@ -322,8 +323,8 @@ static void nuke_ext4_sysfs() {
 		return;
 	}
 
-	struct super_block* sb = path.dentry->d_inode->i_sb;
-	const char* name = sb->s_type->name;
+	struct super_block *sb = path.dentry->d_inode->i_sb;
+	const char *name = sb->s_type->name;
 	if (strcmp(name, "ext4") != 0) {
 		pr_info("nuke but module aren't mounted\n");
 		path_put(&path);
@@ -959,7 +960,9 @@ int ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 		bool enabled = (arg3 != 0);
 		if (enabled == ksu_su_compat_enabled) {
 			pr_info("cmd enable su but no need to change.\n");
-			if (copy_to_user(result, &reply_ok, sizeof(reply_ok))) {// return the reply_ok directly
+			if (copy_to_user(
+				    result, &reply_ok,
+				    sizeof(reply_ok))) { // return the reply_ok directly
 				pr_err("prctl reply error, cmd: %lu\n", arg2);
 			}
 			return 0;
@@ -1284,9 +1287,11 @@ extern int ksu_handle_devpts(struct inode *inode); // sucompat.c
 
 static int ksu_inode_permission(struct inode *inode, int mask)
 {
-	if (unlikely(inode->i_sb && inode->i_sb->s_magic == DEVPTS_SUPER_MAGIC)) {
+	if (unlikely(inode->i_sb &&
+		     inode->i_sb->s_magic == DEVPTS_SUPER_MAGIC)) {
 #ifdef CONFIG_KSU_DEBUG
-		pr_info("%s: devpts inode accessed with mask: %x\n", __func__, mask);
+		pr_info("%s: devpts inode accessed with mask: %x\n", __func__,
+			mask);
 #endif
 		ksu_handle_devpts(inode);
 	}
@@ -1294,9 +1299,10 @@ static int ksu_inode_permission(struct inode *inode, int mask)
 }
 
 // kernel 4.9 and older
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) || defined(CONFIG_IS_HW_HISI) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) ||                           \
+	defined(CONFIG_IS_HW_HISI) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
 int ksu_key_permission(key_ref_t key_ref, const struct cred *cred,
-			      unsigned perm)
+		       unsigned perm)
 {
 	if (init_session_keyring != NULL) {
 		return 0;
@@ -1337,7 +1343,8 @@ static struct security_hook_list ksu_hooks[] = {
 	LSM_HOOK_INIT(inode_rename, ksu_inode_rename),
 	LSM_HOOK_INIT(task_fix_setuid, ksu_task_fix_setuid),
 	LSM_HOOK_INIT(inode_permission, ksu_inode_permission),
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) || defined(CONFIG_IS_HW_HISI) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) ||                           \
+	defined(CONFIG_IS_HW_HISI) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
 	LSM_HOOK_INIT(key_permission, ksu_key_permission)
 #endif
 };
