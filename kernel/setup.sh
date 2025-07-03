@@ -30,6 +30,7 @@ initialize_submodules() {
 
     if [ ! -d "$SUBMODULE_DIR" ] || [ -z "$(ls -A "$SUBMODULE_DIR" 2>/dev/null)" ]; then
         echo "[+] KernelSU-Next couldn't be found. Initializing..."
+        git submodule add -b next-susfs https://github.com/builtbyvys/KernelSU-Next KernelSU-Next
         git submodule update --init --recursive
     else
         echo "[+] KernelSU-Next already initialized, resuming."
