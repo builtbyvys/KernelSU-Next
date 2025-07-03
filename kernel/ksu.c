@@ -23,17 +23,17 @@ bool ksu_queue_work(struct work_struct *work)
 }
 
 extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
-					void *argv, void *envp, int *flags);
+										void *argv, void *envp, int *flags);
 
 extern int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,
-				    void *argv, void *envp, int *flags);
+									void *argv, void *envp, int *flags);
 
 int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
-			void *envp, int *flags)
+						void *envp, int *flags)
 {
 	ksu_handle_execveat_ksud(fd, filename_ptr, argv, envp, flags);
 	return ksu_handle_execveat_sucompat(fd, filename_ptr, argv, envp,
-					    flags);
+										flags);
 }
 
 extern void ksu_sucompat_init();
@@ -43,7 +43,7 @@ extern void ksu_ksud_exit();
 
 int __init ksu_kernelsu_init(void)
 {
-#ifdef CONFIG_KSU_DEBUG
+	#ifdef CONFIG_KSU_DEBUG
 	pr_alert("*************************************************************");
 	pr_alert("**     NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE    **");
 	pr_alert("**                                                         **");
@@ -51,11 +51,11 @@ int __init ksu_kernelsu_init(void)
 	pr_alert("**                                                         **");
 	pr_alert("**     NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE    **");
 	pr_alert("*************************************************************");
-#endif
+	#endif
 
-#ifdef CONFIG_KSU_SUSFS
+	#ifdef CONFIG_KSU_SUSFS
 	susfs_init();
-#endif
+	#endif
 
 	ksu_core_init();
 
@@ -65,18 +65,18 @@ int __init ksu_kernelsu_init(void)
 
 	ksu_throne_tracker_init();
 
-#ifdef CONFIG_KSU_KPROBES_HOOK
+	#ifdef CONFIG_KSU_KPROBES_HOOK
 	ksu_sucompat_init();
 	ksu_ksud_init();
-#else
+	#else
 	pr_alert("KPROBES is disabled, KernelSU may not work, please check https://kernelsu.org/guide/how-to-integrate-for-non-gki.html");
-#endif
+	#endif
 
-#ifdef MODULE
-#ifndef CONFIG_KSU_DEBUG
+	#ifdef MODULE
+	#ifndef CONFIG_KSU_DEBUG
 	kobject_del(&THIS_MODULE->mkobj.kobj);
-#endif
-#endif
+	#endif
+	#endif
 	return 0;
 }
 
@@ -88,10 +88,10 @@ void ksu_kernelsu_exit(void)
 
 	destroy_workqueue(ksu_workqueue);
 
-#ifdef CONFIG_KSU_KPROBES_HOOK
+	#ifdef CONFIG_KSU_KPROBES_HOOK
 	ksu_ksud_exit();
 	ksu_sucompat_exit();
-#endif
+	#endif
 
 	ksu_core_exit();
 }

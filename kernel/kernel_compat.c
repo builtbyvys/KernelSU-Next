@@ -1,361 +1,212 @@
-#include <linux/dcache.h>
-#include <linux/security.h>
-#include <asm/current.h>
-#include <linux/cred.h>
-#include <linux/err.h>
-#include <linux/fs.h>
-#include <linux/kprobes.h>
-#include <linux/types.h>
-#include <linux/uaccess.h>
 #include <linux/version.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
-#include <linux/sched/task_stack.h>
+#include <linux/fs.h>
+#include <linux/nsproxy.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 10, 0)
+#include <linux/sched/task.h>
 #else
 #include <linux/sched.h>
 #endif
-
-#ifdef CONFIG_KSU_SUSFS_SUS_SU
-#include <linux/susfs_def.h>
-#endif
-
-#include "objsec.h"
-#include "allowlist.h"
-#include "arch.h"
+#include <linux/uaccess.h>
 #include "klog.h" // IWYU pragma: keep
-#include "ksud.h"
-#include "kernel_compat.h"
+#include "kernel_compat.h" // Add check Huawei Device
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) || defined(CONFIG_IS_HW_HISI) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
+#include <linux/key.h>
+#include <linux/errno.h>
+#include <linux/cred.h>
+struct key *init_session_keyring = NULL;
 
-#define SU_PATH "/system/bin/su"
-#define SH_PATH "/system/bin/sh"
-
-#ifndef CONFIG_KSU_KPROBES_HOOK
-static bool ksu_sucompat_non_kp __read_mostly = true;
-#endif
-
-extern void ksu_escape_to_root();
-
-static const char sh_path[] = "/system/bin/sh";
-static const char ksud_path[] = KSUD_PATH;
-static const char su[] = SU_PATH;
-
-static inline void __user *userspace_stack_buffer(const void *d, size_t len)
+static inline int install_session_keyring(struct key *keyring)
 {
-	/* To avoid having to mmap a page in userspace, just write below the stack
-	 * pointer. */
-	char __user *p = (void __user *)current_user_stack_pointer() - len;
+	struct cred *new;
+	int ret;
 
-	return copy_to_user(p, d, len) ? NULL : p;
-}
+	new = prepare_creds();
+	if (!new)
+		return -ENOMEM;
 
-static inline char __user *sh_user_path(void)
-{
-
-	return userspace_stack_buffer(sh_path, sizeof(sh_path));
-}
-
-static char __user *ksud_user_path(void)
-{
-	static const char ksud_path[] = KSUD_PATH;
-
-	return userspace_stack_buffer(ksud_path, sizeof(ksud_path));
-}
-
-static int ksu_sucompat_common(const char __user **filename_user, const char *syscall_name,
-							   const bool escalate)
-{
-	if (unlikely(!filename_user))
-		return 0;
-
-	#ifndef CONFIG_KSU_KPROBES_HOOK
-	if (unlikely(!ksu_sucompat_non_kp))
-		return 0;
-	#endif
-
-	if (!ksu_is_allow_uid(current_uid().val))
-		return 0;
-
-	char path[sizeof(su) + 1];
-	if (ksu_copy_from_user_retry(path, *filename_user, sizeof(path)))
-int ksu_access_ok(const void *addr, unsigned long size) {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5,0,0)
-    /* For kernels before 5.0.0, pass the type argument to access_ok. */
-    return access_ok(VERIFY_READ, addr, size);
-#else
-    /* For kernels 5.0.0 and later, ignore the type argument. */
-    return access_ok(addr, size);
-#endif
-}
-
-		return 0;
-
-	path[sizeof(path) - 1] = '\0';
-
-	if (memcmp(path, su, sizeof(su)))
-		return 0;
-
-	if (escalate) {
-		pr_info("%s su found\n", syscall_name);
-		*filename_user = ksud_user_path();
-		ksu_escape_to_root(); // escalate !!
-	} else {
-		pr_info("%s su->sh!\n", syscall_name);
-		*filename_user = sh_user_path();
+	ret = install_session_keyring_to_cred(new, keyring);
+	if (ret < 0) {
+		abort_creds(new);
+		return ret;
 	}
 
-	return 0;
-}
-
-int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
-						 int *__unused_flags)
-{
-	return ksu_sucompat_common(filename_user, "faccessat", false);
-}
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0) && defined(CONFIG_KSU_SUSFS_SUS_SU)
-struct filename* susfs_ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags) {
-	struct filename *name = getname_flags(*filename_user, getname_statx_lookup_flags(*flags), NULL);
-
-	if (unlikely(IS_ERR(name) || name->name == NULL)) {
-		return name;
-	}
-
-	if (!ksu_is_allow_uid(current_uid().val)) {
-		return name;
-	}
-
-	if (likely(memcmp(name->name, su, sizeof(su)))) {
-		return name;
-	}
-
-	const char sh[] = SH_PATH;
-	pr_info("vfs_fstatat su->sh!\n");
-	memcpy((void *)name->name, sh, sizeof(sh));
-	return name;
+	return commit_creds(new);
 }
 #endif
 
-int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
+extern struct task_struct init_task;
+
+// mnt_ns context switch for environment that android_init->nsproxy->mnt_ns != init_task.nsproxy->mnt_ns, such as WSA
+struct ksu_ns_fs_saved {
+	struct nsproxy *ns;
+	struct fs_struct *fs;
+};
+
+static void ksu_save_ns_fs(struct ksu_ns_fs_saved *ns_fs_saved)
 {
-	return ksu_sucompat_common(filename_user, "newfstatat", false);
+	ns_fs_saved->ns = current->nsproxy;
+	ns_fs_saved->fs = current->fs;
 }
 
-// the call from execve_handler_pre won't provided correct value for __never_use_argument, use them after fix execve_handler_pre, keeping them for consistence for manually patched code
-int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
-								 void *__never_use_argv, void *__never_use_envp,
-								 int *__never_use_flags)
+static void ksu_load_ns_fs(struct ksu_ns_fs_saved *ns_fs_saved)
 {
-	struct filename *filename;
-
-	if (unlikely(!filename_ptr))
-		return 0;
-
-	#ifndef CONFIG_KSU_KPROBES_HOOK
-	if (!ksu_sucompat_non_kp) {
-		return 0;
-	}
-	#endif
-
-	if (!ksu_is_allow_uid(current_uid().val))
-		return 0;
-
-	filename = *filename_ptr;
-	if (IS_ERR(filename)) {
-		return 0;
-	}
-
-	if (likely(memcmp(filename->name, su, sizeof(su))))
-		return 0;
-
-	pr_info("do_execveat_common su found\n");
-	memcpy((void *)filename->name, ksud_path, sizeof(ksud_path));
-
-	ksu_escape_to_root();
-
-	return 0;
+	current->nsproxy = ns_fs_saved->ns;
+	current->fs = ns_fs_saved->fs;
 }
 
-int ksu_handle_execve_sucompat(int *fd, const char __user **filename_user,
-							   void *__never_use_argv, void *__never_use_envp,
-							   int *__never_use_flags)
+static bool android_context_saved_checked = false;
+static bool android_context_saved_enabled = false;
+static struct ksu_ns_fs_saved android_context_saved;
+
+void ksu_android_ns_fs_check()
 {
-	return ksu_sucompat_common(filename_user, "sys_execve", true);
-}
-
-int ksu_handle_devpts(struct inode *inode)
-{
-	#ifndef CONFIG_KSU_KPROBES_HOOK
-	if (!ksu_sucompat_non_kp) {
-		return 0;
-	}
-	#endif
-
-	if (!current->mm) {
-		return 0;
-	}
-
-	uid_t uid = current_uid().val;
-	if (uid % 100000 < 10000) {
-		// not untrusted_app, ignore it
-		return 0;
-	}
-
-	if (!ksu_is_allow_uid(uid))
-		return 0;
-
-	if (ksu_devpts_sid) {
-		#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)
-		struct inode_security_struct *sec = selinux_inode(inode);
-		#else
-		struct inode_security_struct *sec =
-		(struct inode_security_struct *)inode->i_security;
-		#endif
-		if (sec) {
-			sec->sid = ksu_devpts_sid;
-		}
-	}
-
-	return 0;
-}
-
-#ifdef CONFIG_KSU_KPROBES_HOOK
-
-static int faccessat_handler_pre(struct kprobe *p, struct pt_regs *regs)
-{
-	struct pt_regs *real_regs = PT_REAL_REGS(regs);
-	int *dfd = (int *)&PT_REGS_PARM1(real_regs);
-	const char __user **filename_user =
-	(const char **)&PT_REGS_PARM2(real_regs);
-	int *mode = (int *)&PT_REGS_PARM3(real_regs);
-
-	return ksu_handle_faccessat(dfd, filename_user, mode, NULL);
-}
-
-static int newfstatat_handler_pre(struct kprobe *p, struct pt_regs *regs)
-{
-	struct pt_regs *real_regs = PT_REAL_REGS(regs);
-	int *dfd = (int *)&PT_REGS_PARM1(real_regs);
-	const char __user **filename_user =
-	(const char **)&PT_REGS_PARM2(real_regs);
-	int *flags = (int *)&PT_REGS_SYSCALL_PARM4(real_regs);
-
-	return ksu_handle_stat(dfd, filename_user, flags);
-}
-
-static int execve_handler_pre(struct kprobe *p, struct pt_regs *regs)
-{
-	struct pt_regs *real_regs = PT_REAL_REGS(regs);
-	const char __user **filename_user =
-	(const char **)&PT_REGS_PARM1(real_regs);
-
-	return ksu_handle_execve_sucompat(AT_FDCWD, filename_user, NULL, NULL,
-									  NULL);
-}
-
-static int pts_unix98_lookup_pre(struct kprobe *p, struct pt_regs *regs)
-{
-	struct inode *inode;
-	#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 6, 0)
-	struct file *file = (struct file *)PT_REGS_PARM2(regs);
-	inode = file->f_path.dentry->d_inode;
-	#else
-	inode = (struct inode *)PT_REGS_PARM2(regs);
-	#endif
-
-	return ksu_handle_devpts(inode);
-}
-
-static struct kprobe *init_kprobe(const char *name,
-								  kprobe_pre_handler_t handler)
-{
-	struct kprobe *kp = kzalloc(sizeof(struct kprobe), GFP_KERNEL);
-	if (!kp)
-		return NULL;
-	kp->symbol_name = name;
-	kp->pre_handler = handler;
-
-	int ret = register_kprobe(kp);
-	pr_info("sucompat: register_%s kprobe: %d\n", name, ret);
-	if (ret) {
-		kfree(kp);
-		return NULL;
-	}
-
-	return kp;
-}
-
-static void destroy_kprobe(struct kprobe **kp_ptr)
-{
-	struct kprobe *kp = *kp_ptr;
-	if (!kp)
+	if (android_context_saved_checked)
 		return;
-	unregister_kprobe(kp);
-	synchronize_rcu();
-	kfree(kp);
-	*kp_ptr = NULL;
+	android_context_saved_checked = true;
+	task_lock(current);
+	if (current->nsproxy && current->fs &&
+		current->nsproxy->mnt_ns != init_task.nsproxy->mnt_ns) {
+		android_context_saved_enabled = true;
+	pr_info("android context saved enabled due to init mnt_ns(%p) != android mnt_ns(%p)\n",
+			current->nsproxy->mnt_ns, init_task.nsproxy->mnt_ns);
+	ksu_save_ns_fs(&android_context_saved);
+		} else {
+			pr_info("android context saved disabled\n");
+		}
+		task_unlock(current);
 }
 
-static struct kprobe *su_kps[4];
+struct file *ksu_filp_open_compat(const char *filename, int flags, umode_t mode)
+{
+	#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) || defined(CONFIG_IS_HW_HISI) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
+	if (init_session_keyring != NULL && !current_cred()->session_keyring &&
+		(current->flags & PF_WQ_WORKER)) {
+		pr_info("installing init session keyring for older kernel\n");
+	install_session_keyring(init_session_keyring);
+		}
+		#endif
+		// switch mnt_ns even if current is not wq_worker, to ensure what we open is the correct file in android mnt_ns, rather than user created mnt_ns
+		struct ksu_ns_fs_saved saved;
+		if (android_context_saved_enabled) {
+			#ifdef CONFIG_KSU_DEBUG
+			pr_info("start switch current nsproxy and fs to android context\n");
+			#endif
+			task_lock(current);
+			ksu_save_ns_fs(&saved);
+			ksu_load_ns_fs(&android_context_saved);
+			task_unlock(current);
+		}
+		struct file *fp = filp_open(filename, flags, mode);
+		if (android_context_saved_enabled) {
+			task_lock(current);
+			ksu_load_ns_fs(&saved);
+			task_unlock(current);
+			#ifdef CONFIG_KSU_DEBUG
+			pr_info("switch current nsproxy and fs back to saved successfully\n");
+			#endif
+		}
+		return fp;
+}
+
+ssize_t ksu_kernel_read_compat(struct file *p, void *buf, size_t count,
+							   loff_t *pos)
+{
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0) || defined(KSU_KERNEL_READ)
+	return kernel_read(p, buf, count, pos);
+	#else
+	loff_t offset = pos ? *pos : 0;
+	ssize_t result = kernel_read(p, offset, (char *)buf, count);
+	if (pos && result > 0) {
+		*pos = offset + result;
+	}
+	return result;
+	#endif
+}
+
+ssize_t ksu_kernel_write_compat(struct file *p, const void *buf, size_t count,
+								loff_t *pos)
+{
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0) || defined(KSU_KERNEL_WRITE)
+	return kernel_write(p, buf, count, pos);
+	#else
+	loff_t offset = pos ? *pos : 0;
+	ssize_t result = kernel_write(p, buf, count, offset);
+	if (pos && result > 0) {
+		*pos = offset + result;
+	}
+	return result;
+	#endif
+}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0) || defined(KSU_STRNCPY_FROM_USER_NOFAULT)
+long ksu_strncpy_from_user_nofault(char *dst, const void __user *unsafe_addr,
+								   long count)
+{
+	return strncpy_from_user_nofault(dst, unsafe_addr, count);
+}
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0)
+long ksu_strncpy_from_user_nofault(char *dst, const void __user *unsafe_addr,
+								   long count)
+{
+	return strncpy_from_unsafe_user(dst, unsafe_addr, count);
+}
+#else
+// Copied from: https://elixir.bootlin.com/linux/v4.9.337/source/mm/maccess.c#L201
+long ksu_strncpy_from_user_nofault(char *dst, const void __user *unsafe_addr,
+								   long count)
+{
+	mm_segment_t old_fs = get_fs();
+	long ret;
+
+	if (unlikely(count <= 0))
+		return 0;
+
+	set_fs(USER_DS);
+	pagefault_disable();
+	ret = strncpy_from_user(dst, unsafe_addr, count);
+	pagefault_enable();
+	set_fs(old_fs);
+
+	if (ret >= count) {
+		ret = count;
+		dst[ret - 1] = '\0';
+	} else if (ret > 0) {
+		ret++;
+	}
+
+	return ret;
+}
 #endif
 
-// sucompat: permited process can execute 'su' to gain root access.
-void ksu_sucompat_init()
+int ksu_access_ok(const void *addr, unsigned long size)
 {
-	#ifdef CONFIG_KSU_KPROBES_HOOK
-	su_kps[0] = init_kprobe(SYS_EXECVE_SYMBOL, execve_handler_pre);
-	su_kps[1] = init_kprobe(SYS_FACCESSAT_SYMBOL, faccessat_handler_pre);
-	su_kps[2] = init_kprobe(SYS_NEWFSTATAT_SYMBOL, newfstatat_handler_pre);
-	su_kps[3] = init_kprobe("pts_unix98_lookup", pts_unix98_lookup_pre);
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0)
+	return access_ok(addr, size);
 	#else
-	ksu_sucompat_non_kp = true;
-	pr_info("ksu_sucompat_init: hooks enabled: execve/execveat_su, faccessat, stat, devpts\n");
+	return access_ok(VERIFY_READ, addr, size);
 	#endif
 }
 
-void ksu_sucompat_exit()
+long ksu_copy_from_user_nofault(void *dst, const void __user *src, size_t size)
 {
-	#ifdef CONFIG_KSU_KPROBES_HOOK
-	for (int i = 0; i < ARRAY_SIZE(su_kps); i++) {
-		destroy_kprobe(&su_kps[i]);
-	}
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
+	return copy_from_user_nofault(dst, src, size);
 	#else
-	ksu_sucompat_non_kp = false;
-	pr_info("ksu_sucompat_exit: hooks disabled: execve/execveat_su, faccessat, stat, devpts\n");
+	// https://elixir.bootlin.com/linux/v5.8/source/mm/maccess.c#L205
+	long ret = -EFAULT;
+	mm_segment_t old_fs = get_fs();
+
+	set_fs(USER_DS);
+	// tweaked to use ksu_access_ok
+	if (ksu_access_ok(src, size)) {
+		pagefault_disable();
+		ret = __copy_from_user_inatomic(dst, src, size);
+		pagefault_enable();
+	}
+	set_fs(old_fs);
+
+	if (ret)
+		return -EFAULT;
+	return 0;
 	#endif
 }
-
-#ifdef CONFIG_KSU_SUSFS_SUS_SU
-extern bool ksu_su_compat_enabled;
-bool ksu_devpts_hook = false;
-bool susfs_is_sus_su_hooks_enabled __read_mostly = false;
-int susfs_sus_su_working_mode = 0;
-
-static bool ksu_is_su_kps_enabled(void) {
-	for (int i = 0; i < ARRAY_SIZE(su_kps); i++) {
-		if (su_kps[i]) {
-			return true;
-		}
-	}
-	return false;
-}
-
-void ksu_susfs_disable_sus_su(void) {
-	susfs_is_sus_su_hooks_enabled = false;
-	ksu_devpts_hook = false;
-	susfs_sus_su_working_mode = SUS_SU_DISABLED;
-	// Re-enable the su_kps for user, users need to toggle off the kprobe hooks again in ksu manager if they want it disabled.
-	if (!ksu_is_su_kps_enabled()) {
-		ksu_sucompat_init();
-		ksu_su_compat_enabled = true;
-	}
-}
-
-void ksu_susfs_enable_sus_su(void) {
-	if (ksu_is_su_kps_enabled()) {
-		ksu_sucompat_exit();
-		ksu_su_compat_enabled = false;
-	}
-	susfs_is_sus_su_hooks_enabled = true;
-	ksu_devpts_hook = true;
-	susfs_sus_su_working_mode = SUS_SU_WITH_HOOKS;
-}
-#endif // #ifdef CONFIG_KSU_SUSFS_SUS_SU

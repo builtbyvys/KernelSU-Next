@@ -72,7 +72,7 @@ static void init_default_profiles()
 	default_root_profile.groups_count = 1;
 	default_root_profile.groups[0] = 0;
 	memcpy(&default_root_profile.capabilities.effective, &full_cap,
-		sizeof(default_root_profile.capabilities.effective));
+		   sizeof(default_root_profile.capabilities.effective));
 	default_root_profile.namespaces = 0;
 	strcpy(default_root_profile.selinux_domain, KSU_DEFAULT_SELINUX_DOMAIN);
 
@@ -105,7 +105,7 @@ void ksu_show_allow_list(void)
 	list_for_each (pos, &allow_list) {
 		p = list_entry(pos, struct perm_data, list);
 		pr_info("uid :%d, allow: %d\n", p->profile.current_uid,
-			p->profile.allow_su);
+				p->profile.allow_su);
 	}
 }
 
@@ -140,7 +140,7 @@ bool ksu_get_app_profile(struct app_profile *profile)
 		}
 	}
 
-exit:
+	exit:
 	return found;
 }
 
@@ -189,12 +189,12 @@ bool ksu_set_app_profile(struct app_profile *profile, bool persist)
 		p = list_entry(pos, struct perm_data, list);
 		// both uid and package must match, otherwise it will break multiple package with different user id
 		if (profile->current_uid == p->profile.current_uid &&
-		    !strcmp(profile->key, p->profile.key)) {
+			!strcmp(profile->key, p->profile.key)) {
 			// found it, just override it all!
 			memcpy(&p->profile, profile, sizeof(*profile));
-			result = true;
-			goto out;
-		}
+		result = true;
+		goto out;
+			}
 	}
 
 	// not found, alloc a new node!
@@ -207,17 +207,17 @@ bool ksu_set_app_profile(struct app_profile *profile, bool persist)
 	memcpy(&p->profile, profile, sizeof(*profile));
 	if (profile->allow_su) {
 		pr_info("set root profile, key: %s, uid: %d, gid: %d, context: %s\n",
-			profile->key, profile->current_uid,
-			profile->rp_config.profile.gid,
-			profile->rp_config.profile.selinux_domain);
+				profile->key, profile->current_uid,
+		  profile->rp_config.profile.gid,
+		  profile->rp_config.profile.selinux_domain);
 	} else {
 		pr_info("set app profile, key: %s, uid: %d, umount modules: %d\n",
-			profile->key, profile->current_uid,
-			profile->nrp_config.profile.umount_modules);
+				profile->key, profile->current_uid,
+		  profile->nrp_config.profile.umount_modules);
 	}
 	list_add_tail(&p->list, &allow_list);
 
-out:
+	out:
 	if (profile->current_uid <= BITMAP_UID_MAX) {
 		if (profile->allow_su)
 			allow_list_bitmap[profile->current_uid / BITS_PER_BYTE] |= 1 << (profile->current_uid % BITS_PER_BYTE);
@@ -245,13 +245,13 @@ out:
 	if (unlikely(!strcmp(profile->key, "$"))) {
 		// set default non root profile
 		memcpy(&default_non_root_profile, &profile->nrp_config.profile,
-		       sizeof(default_non_root_profile));
+			   sizeof(default_non_root_profile));
 	}
 
 	if (unlikely(!strcmp(profile->key, "#"))) {
 		// set default root profile
 		memcpy(&default_root_profile, &profile->rp_config.profile,
-		       sizeof(default_root_profile));
+			   sizeof(default_root_profile));
 	}
 
 	if (persist)
@@ -360,7 +360,7 @@ static void do_save_allow_list(struct work_struct *work)
 	loff_t off = 0;
 
 	struct file *fp =
-		ksu_filp_open_compat(KERNEL_SU_ALLOWLIST, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	ksu_filp_open_compat(KERNEL_SU_ALLOWLIST, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 	if (IS_ERR(fp)) {
 		pr_err("save_allow_list create file failed: %ld\n", PTR_ERR(fp));
 		return;
@@ -368,29 +368,29 @@ static void do_save_allow_list(struct work_struct *work)
 
 	// store magic and version
 	if (ksu_kernel_write_compat(fp, &magic, sizeof(magic), &off) !=
-	    sizeof(magic)) {
+		sizeof(magic)) {
 		pr_err("save_allow_list write magic failed.\n");
-		goto exit;
-	}
+	goto exit;
+		}
 
-	if (ksu_kernel_write_compat(fp, &version, sizeof(version), &off) !=
-	    sizeof(version)) {
-		pr_err("save_allow_list write version failed.\n");
+		if (ksu_kernel_write_compat(fp, &version, sizeof(version), &off) !=
+			sizeof(version)) {
+			pr_err("save_allow_list write version failed.\n");
 		goto exit;
-	}
+			}
 
-	list_for_each (pos, &allow_list) {
-		p = list_entry(pos, struct perm_data, list);
-		pr_info("save allow list, name: %s uid :%d, allow: %d\n",
-			p->profile.key, p->profile.current_uid,
+			list_for_each (pos, &allow_list) {
+				p = list_entry(pos, struct perm_data, list);
+				pr_info("save allow list, name: %s uid :%d, allow: %d\n",
+						p->profile.key, p->profile.current_uid,
 			p->profile.allow_su);
 
-		ksu_kernel_write_compat(fp, &p->profile, sizeof(p->profile),
-					&off);
-	}
+				ksu_kernel_write_compat(fp, &p->profile, sizeof(p->profile),
+										&off);
+			}
 
-exit:
-	filp_close(fp, 0);
+			exit:
+			filp_close(fp, 0);
 }
 
 static void do_load_allow_list(struct work_struct *work)
@@ -401,10 +401,10 @@ static void do_load_allow_list(struct work_struct *work)
 	u32 magic;
 	u32 version;
 
-#ifdef CONFIG_KSU_DEBUG
+	#ifdef CONFIG_KSU_DEBUG
 	// always allow adb shell by default
 	ksu_grant_root_to_shell();
-#endif
+	#endif
 
 	// load allowlist now!
 	fp = ksu_filp_open_compat(KERNEL_SU_ALLOWLIST, O_RDONLY, 0);
@@ -415,39 +415,39 @@ static void do_load_allow_list(struct work_struct *work)
 
 	// verify magic
 	if (ksu_kernel_read_compat(fp, &magic, sizeof(magic), &off) !=
-		    sizeof(magic) ||
-	    magic != FILE_MAGIC) {
+		sizeof(magic) ||
+		magic != FILE_MAGIC) {
 		pr_err("allowlist file invalid: %d!\n", magic);
-		goto exit;
-	}
-
-	if (ksu_kernel_read_compat(fp, &version, sizeof(version), &off) !=
-	    sizeof(version)) {
-		pr_err("allowlist read version: %d failed\n", version);
-		goto exit;
-	}
-
-	pr_info("allowlist version: %d\n", version);
-
-	while (true) {
-		struct app_profile profile;
-
-		ret = ksu_kernel_read_compat(fp, &profile, sizeof(profile),
-					     &off);
-
-		if (ret <= 0) {
-			pr_info("load_allow_list read err: %zd\n", ret);
-			break;
+	goto exit;
 		}
 
-		pr_info("load_allow_uid, name: %s, uid: %d, allow: %d\n",
-			profile.key, profile.current_uid, profile.allow_su);
-		ksu_set_app_profile(&profile, false);
-	}
+		if (ksu_kernel_read_compat(fp, &version, sizeof(version), &off) !=
+			sizeof(version)) {
+			pr_err("allowlist read version: %d failed\n", version);
+		goto exit;
+			}
 
-exit:
-	ksu_show_allow_list();
-	filp_close(fp, 0);
+			pr_info("allowlist version: %d\n", version);
+
+			while (true) {
+				struct app_profile profile;
+
+				ret = ksu_kernel_read_compat(fp, &profile, sizeof(profile),
+											 &off);
+
+				if (ret <= 0) {
+					pr_info("load_allow_list read err: %zd\n", ret);
+					break;
+				}
+
+				pr_info("load_allow_uid, name: %s, uid: %d, allow: %d\n",
+						profile.key, profile.current_uid, profile.allow_su);
+				ksu_set_app_profile(&profile, false);
+			}
+
+			exit:
+			ksu_show_allow_list();
+			filp_close(fp, 0);
 }
 
 void ksu_prune_allowlist(bool (*is_uid_valid)(uid_t, char *, void *), void *data)
